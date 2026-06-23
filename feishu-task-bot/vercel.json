@@ -1,13 +1,8 @@
 {
-  "version": 2,
-  "builds": [
-    { "src": "api/**/*.js", "use": "@vercel/node" }
-  ],
-  "routes": [
-    { "src": "/webhook/event", "dest": "/api/webhook/event.js" },
-    { "src": "/health", "dest": "/api/health.js" },
-    { "src": "/api/cron/daily-summary", "dest": "/api/cron/daily-summary.js" },
-    { "src": "/api/cron/setup-cron", "dest": "/api/cron/setup-cron.js" }
+  "rewrites": [
+    { "source": "/webhook/event", "destination": "/api/webhook/event" },
+    { "source": "/health", "destination": "/api/health" },
+    { "source": "/api/cron/daily-summary", "destination": "/api/cron/daily-summary" }
   ],
   "crons": [
     {
@@ -15,7 +10,6 @@
       "schedule": "0 10 * * *"
     }
   ],
-  "env": {},
   "functions": {
     "api/**/*.js": {
       "maxDuration": 30
