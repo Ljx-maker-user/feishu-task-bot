@@ -42,8 +42,9 @@ app.post('/webhook/event', async (req, res) => {
     return res.json({ challenge: event.challenge });
   }
 
-  // 验证 token
-  if (event.token !== config.feishu.verificationToken) {
+  // 验证 token（兼容 v1.0 和 v2.0 格式）
+  const eventToken = event.token || event.header?.token;
+  if (eventToken !== config.feishu.verificationToken) {
     logger.warn('验证 token 不匹配');
     return res.status(403).json({ error: 'Invalid token' });
   }
