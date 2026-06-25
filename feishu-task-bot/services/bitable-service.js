@@ -14,7 +14,7 @@ class BitableService {
       '优先级': task.priority || '中',
       '状态': task.status || '待开始',
       '来源': 'AI自动提取',
-      '创建时间': new Date().toISOString(),
+      '创建时间': Date.now(),
     };
 
     const data = await feishuClient.request(
@@ -48,13 +48,15 @@ class BitableService {
 
   async getTodayTasks() {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const todayMs = today.getTime();
       const data = await feishuClient.request(
         'GET',
         `/bitable/v1/apps/${this.appToken}/tables/${this.tableId}/records`,
         null,
         {
-          filter: `CurrentValue.[创建时间] >= "${today}T00:00:00.000Z"`,
+          filter: `CurrentValue.[创建时间] >= ${todayMs}`,
           page_size: 100,
         }
       );
