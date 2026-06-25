@@ -102,7 +102,7 @@ function formatTimestamp(timestamp) {
   });
 }
 
-// 获取今日时间范围（Unix 时间戳，秒）
+// 获取今日时间范围（Unix 时间戳，秒，数字类型）
 function getTodayTimeRange() {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -110,8 +110,8 @@ function getTodayTimeRange() {
   tomorrow.setDate(tomorrow.getDate() + 1);
 
   return {
-    startTime: Math.floor(today.getTime() / 1000).toString(),
-    endTime: Math.floor(tomorrow.getTime() / 1000).toString(),
+    startTime: Math.floor(today.getTime() / 1000),  // 数字类型，不是字符串
+    endTime: Math.floor(tomorrow.getTime() / 1000), // 数字类型，不是字符串
   };
 }
 
