@@ -118,10 +118,14 @@ async function handleMessageReceive(event) {
   const content = parseTextContent(message);
   logger.info(`解析的消息内容: ${content}`);
 
+  // 清理 @提及，提取实际命令
+  const cleanContent = cleanAtMentions(content);
+  logger.info(`清理后的内容: ${cleanContent}`);
+
   // 命令消息始终处理（不受 monitoredChatIds 限制）
-  if (content && content.startsWith('/')) {
-    logger.info(`收到命令消息: ${chatId}, 命令: ${content}`);
-    await handleCommand(chatId, content, message.sender?.sender_id?.open_id);
+  if (cleanContent && cleanContent.startsWith('/')) {
+    logger.info(`收到命令消息: ${chatId}, 命令: ${cleanContent}`);
+    await handleCommand(chatId, cleanContent, message.sender?.sender_id?.open_id);
     return;
   }
 
@@ -155,6 +159,15 @@ function parseTextContent(message) {
     logger.debug('原始 content:', message.content);
     return null;
   }
+}
+
+// 清理 @提及标记
+function cleanAtMentions(text) {
+  if (!text) return text;
+  
+  // 飞书的 @提及格式: @_user_1, @_user_2 等
+  // 或者 @_all (所有人)
+  return text.replace(/@_user_\d+|@_all/g, '').trim();
 }
 
 // 处理命令
