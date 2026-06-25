@@ -71,10 +71,24 @@ class FeishuClient {
   }
 
   async sendMessage(chatId, content, msgType = 'text') {
+    let formattedContent;
+    
+    if (typeof content === 'string') {
+      // 如果是字符串，根据消息类型包装成 JSON
+      if (msgType === 'text') {
+        formattedContent = JSON.stringify({ text: content });
+      } else {
+        formattedContent = content;
+      }
+    } else {
+      // 如果已经是对象，直接序列化
+      formattedContent = JSON.stringify(content);
+    }
+    
     return this.request('POST', '/im/v1/messages', {
       receive_id: chatId,
       msg_type: msgType,
-      content: typeof content === 'string' ? content : JSON.stringify(content),
+      content: formattedContent,
     }, {
       receive_id_type: 'chat_id',
     });
