@@ -10,13 +10,25 @@ const bitableService = require('./services/bitable-service');
 const app = express();
 app.use(express.json());
 
+// 请求日志中间件
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.path}`);
+  next();
+});
+
 // 健康检查
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// 飞书事件订阅回调
-app.post('/webhook/event', async (req, res) => {
+// 飞书事件订阅回调 - 支持多个路径
+app.post('/webhook/event', handleWebhook);
+app.post('/api/webhook/event', handleWebhook);
+
+async function handleWebhook(req, res) {
+  logger.info('收到 webhook 请求');
+  logger.debug('请求体:', JSON.stringify(req.body, null, 2));
+  
   const { timestamp, nonce, signature, encrypt } = req.body;
 
   // 验证签名
@@ -36,18 +48,13 @@ app.post('/webhook/event', async (req, res) => {
     event = req.body;
   }
 
+  logger.info('事件类型:', event.type || event.header?.event_type);
+
   // URL 验证（首次配置事件订阅时飞书会发送验证请求）
   if (event.type === 'url_verification') {
     logger.info('收到 URL 验证请求');
     return res.json({ challenge: event.challenge });
   }
-
-  // 验证 token（兼容 v1.0 和 v2.0 格式）
-  // const eventToken = event.token || event.header?.token;
-  // if (eventToken !== config.feishu.verificationToken) {
-  //   logger.warn('验证 token 不匹配');
-  //   return res.status(403).json({ error: 'Invalid token' });
-  // }
 
   // 立即响应，避免飞书重试
   res.json({ code: 0 });
@@ -58,21 +65,28 @@ app.post('/webhook/event', async (req, res) => {
   } catch (error) {
     logger.error('事件处理失败:', error);
   }
-});
+}
 
 // 处理飞书事件
 async function handleEvent(event) {
-  const eventType = event.header?.event_type || event.event?.type;
+  // 飞书 v2.0 事件格式
+  const eventType = event.header?.event_type || event.event?.type || event.type;
+  logger.info(`处理事件: ${eventType}`);
 
   switch (eventType) {
     case 'im.message.receive_v1':
-      await handleMessageReceive(event.event);
+      // v2.0 格式: event.event.message
+      // v1.0 格式: event.message
+      const messageEvent = event.event?.message ? event.event : { message: event.message };
+      await handleMessageReceive(messageEvent);
       break;
     case 'im.chat.member.bot.added_v1':
-      await handleBotAddedToChat(event.event);
+      const addedEvent = event.event || event;
+      await handleBotAddedToChat(addedEvent);
       break;
     case 'im.chat.member.bot.deleted_v1':
-      await handleBotRemovedFromChat(event.event);
+      const removedEvent = event.event || event;
+      await handleBotRemovedFromChat(removedEvent);
       break;
     default:
       logger.debug(`未处理的事件类型: ${eventType}`);
@@ -82,38 +96,63 @@ async function handleEvent(event) {
 // 处理消息接收事件
 async function handleMessageReceive(event) {
   const message = event.message;
+  
+  if (!message) {
+    logger.warn('消息事件中没有 message 字段');
+    logger.debug('事件内容:', JSON.stringify(event, null, 2));
+    return;
+  }
+  
   const chatId = message.chat_id;
   const messageId = message.message_id;
 
-  // 检查是否是监控的群聊
+  logger.info(`收到消息 - chatId: ${chatId}, messageId: ${messageId}, type: ${message.message_type}`);
+
+  // 消息去重
+  if (isDuplicate(messageId)) {
+    logger.info(`消息 ${messageId} 重复，跳过`);
+    return;
+  }
+
+  // 解析文本内容（提前解析，命令不受群聊白名单限制）
+  const content = parseTextContent(message);
+  logger.info(`解析的消息内容: ${content}`);
+
+  // 命令消息始终处理（不受 monitoredChatIds 限制）
+  if (content && content.startsWith('/')) {
+    logger.info(`收到命令消息: ${chatId}, 命令: ${content}`);
+    await handleCommand(chatId, content, message.sender?.sender_id?.open_id);
+    return;
+  }
+
+  // 非命令消息需要检查是否是监控的群聊
   if (!config.monitoredChatIds.includes(chatId)) {
     logger.debug(`忽略非监控群聊消息: ${chatId}`);
     return;
   }
 
-  // 消息去重
-  if (isDuplicate(messageId)) {
-    return;
-  }
-
   logger.info(`收到群聊消息: ${chatId}, 类型: ${message.message_type}`);
-
-  // 处理命令消息
-  const content = parseTextContent(message);
-  if (content && content.startsWith('/')) {
-    await handleCommand(chatId, content, message.sender?.sender_id?.open_id);
-  }
 }
 
 // 解析文本内容
 function parseTextContent(message) {
   try {
-    const content = JSON.parse(message.content);
+    if (!message.content) {
+      logger.warn('消息没有 content 字段');
+      return null;
+    }
+    
+    const content = typeof message.content === 'string' 
+      ? JSON.parse(message.content) 
+      : message.content;
+      
     if (message.message_type === 'text') {
       return content.text;
     }
     return null;
-  } catch {
+  } catch (error) {
+    logger.error('解析消息内容失败:', error);
+    logger.debug('原始 content:', message.content);
     return null;
   }
 }
@@ -122,6 +161,8 @@ function parseTextContent(message) {
 async function handleCommand(chatId, command, userId) {
   const parts = command.trim().split(' ');
   const cmd = parts[0].toLowerCase();
+
+  logger.info(`处理命令: ${cmd}`);
 
   switch (cmd) {
     case '/help':
@@ -324,17 +365,43 @@ function startCronJobs() {
 
 // 启动服务器
 function startServer() {
+  // 添加全局错误处理
+  process.on('uncaughtException', (error) => {
+    logger.error('未捕获的异常:', error);
+    logger.error(error.stack);
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    logger.error('未处理的 Promise 拒绝:', reason);
+  });
+
+  logger.info('🔄 正在启动飞书AI任务助手...');
+  logger.info(`📋 配置状态:`);
+  logger.info(`  - FEISHU_APP_ID: ${config.feishu.appId ? '✅ 已配置' : '❌ 缺失'}`);
+  logger.info(`  - FEISHU_APP_SECRET: ${config.feishu.appSecret ? '✅ 已配置' : '❌ 缺失'}`);
+  logger.info(`  - AI_API_KEY: ${config.ai.apiKey ? '✅ 已配置' : '⚠️ 未配置 (AI功能不可用)'}`);
+  logger.info(`  - BITABLE_APP_TOKEN: ${config.bitable.appToken ? '✅ 已配置' : '⚠️ 未配置 (多维表格不可用)'}`);
+  logger.info(`  - BITABLE_TABLE_ID: ${config.bitable.tableId ? '✅ 已配置' : '⚠️ 未配置 (多维表格不可用)'}`);
+  logger.info(`  - MONITORED_CHAT_IDS: ${config.monitoredChatIds.length > 0 ? config.monitoredChatIds.join(', ') : '⚠️ 空 (仅命令可用)'}`);
+  logger.info(`  - PORT: ${config.server.port}`);
+
   if (!validateConfig()) {
-    process.exit(1);
+    logger.warn('⚠️ 部分配置缺失，基础功能（命令回复）仍可运行');
   }
 
-  app.listen(config.server.port, config.server.host, () => {
+  const server = app.listen(config.server.port, config.server.host, () => {
     logger.info(`🚀 飞书AI任务助手已启动`);
     logger.info(`📡 服务地址: http://${config.server.host}:${config.server.port}`);
     logger.info(`🔗 Webhook: http://${config.server.host}:${config.server.port}/webhook/event`);
+    logger.info(`🔗 Webhook (alt): http://${config.server.host}:${config.server.port}/api/webhook/event`);
     logger.info(`💚 健康检查: http://${config.server.host}:${config.server.port}/health`);
     
     startCronJobs();
+  });
+
+  server.on('error', (error) => {
+    logger.error('服务器启动失败:', error);
+    process.exit(1);
   });
 }
 
